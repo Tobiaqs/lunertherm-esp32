@@ -364,6 +364,7 @@ void handle_sms() {
             uint16_t t = s.substring(16).toInt();
             if (t >= 0 && t <= 30000) {
                 target_temp_mc = t;
+                thermostat_enabled = true;
                 SerialMon.print("New temperature set to ");
                 SerialMon.println(t);
             }
@@ -375,7 +376,7 @@ void handle_sms() {
                 timer_millis = 0;
             } else {
                 timer_enabled = true;
-                timer_millis = millis() + (t * 60 * 1000);
+                timer_millis = millis() + (t * 60000);
             }
             SerialMon.print("Timer set to ");
             SerialMon.println(t);
