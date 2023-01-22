@@ -45,6 +45,9 @@ const char apn[] = "luner";
 bool new_sms_available = false;
 uint16_t target_temp_mc = 5000;
 uint16_t current_temp_mc = 5000;
+bool timer_enabled = false;
+uint32_t timer_millis = 0;
+bool thermostat_enabled = false;
 uint16_t bandwidth = 500;
 bool relay_1 = false;
 bool relay_2 = false;
@@ -139,9 +142,19 @@ bool gprs_send() {
     modem.print("AT+CIPSEND\r\n");
     if (!modem.find('>')) { return false; }
 
+    uint32_t now = millis();
+
     modem.print(current_temp_mc);
     modem.print('/');
     modem.print(target_temp_mc);
+    modem.print('/');
+    modem.print(thermostat_enabled ? '1' : '0');
+    modem.print('/');
+    modem.print(timer_enabled ? '1' : '0');
+    modem.print('/');
+    modem.print(now);
+    modem.print('/');
+    modem.print(timer_millis);
     modem.print('/');
     modem.write(relay_1 ? '1' : '0');
     modem.print('/');
@@ -304,6 +317,24 @@ void setup() {
     while (!initialize_modem());
 }
 
+void process_timer() {
+    if (!timer_enabled) {
+        return;
+    }
+
+    uint32_t now = millis();
+
+    // Either:
+    // - millis() is past timer_millis by at most 30 minutes
+    // - millis() overflowed, and timer_millis is within last 30 minutes of uint32_t
+    //     and millis() is within first 30 minutes of uint32_t
+    if ((now > timer_millis && now - timer_millis < 1800000) || (now < timer_millis && now < 1800000 && timer_millis > 4294967295 - 1800000)) {
+        timer_enabled = false;
+        timer_millis = 0;
+        thermostat_enabled = false;
+    }
+}
+
 void handle_sms() {
     new_sms_available = false;
 
@@ -331,13 +362,31 @@ void handle_sms() {
 
         if (s.startsWith("set_temperature ")) {
             uint16_t t = s.substring(16).toInt();
-            if (t >= 5000 && t <= 30000) {
+            if (t >= 0 && t <= 30000) {
                 target_temp_mc = t;
                 SerialMon.print("New temperature set to ");
                 SerialMon.println(t);
             }
             do_upload = true;
+        } else if (s.startsWith("set_timer ")) {
+            uint16_t t = s.substring(10).toInt();
+            if (t == 0) {
+                timer_enabled = false;
+                timer_millis = 0;
+            } else {
+                timer_enabled = true;
+                timer_millis = millis() + (t * 60 * 1000);
+            }
+            SerialMon.print("Timer set to ");
+            SerialMon.println(t);
+            do_upload = true;
         } else if (s == "get") {
+            do_upload = true;
+        } else if (s == "thermostat_on") {
+            thermostat_enabled = true;
+            do_upload = true;
+        } else if (s == "thermostat_off") {
+            thermostat_enabled = false;
             do_upload = true;
         } else if (s == "relay_on") {
             relay_2 = true;
@@ -374,6 +423,12 @@ void handle_sms() {
 }
 
 void control_heating() {
+    if (!thermostat_enabled) {
+        relay_1 = false;
+        digitalWrite(RELAY_1, HIGH);
+        return;
+    }
+
     if (!relay_1 && current_temp_mc + bandwidth <= target_temp_mc) {
         // Getting too cold
         relay_1 = true;
@@ -392,6 +447,7 @@ void loop() {
         handle_sms();
         // will also do updated_oled
     } else {
+        process_timer();
         control_heating();
         update_oled();
     }
